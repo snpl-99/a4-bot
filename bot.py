@@ -1,30 +1,47 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+import io
 from PIL import Image
-import os
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters,
+    CommandHandler
+)
 
 TOKEN = "8329558378:AAHsO-VRONdeDY3937r2ZCmFJmvFpSQMntc"
 
 user_data = {}
 
-A4_WIDTH = 2480
-A4_HEIGHT = 3508
+A4_SIZE = (2480, 3508)
 
 
 # =========================
-# استلام الصورة
+# START
+# =========================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "👋 أهلاً!\n"
+        "ارسل صورة وأنا أقسمها لك بسرعة ⚡️"
+    )
+
+
+# =========================
+# استلام الصورة (أسرع طريقة)
 # =========================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo_file = await update.message.photo[-1].get_file()
-    path = "input.jpg"
+    file = await update.message.photo[-1].get_file()
 
-    await photo_file.download_to_drive(path)
+    bio = io.BytesIO()
+    await file.download_to_memory(out=bio)
+    bio.seek(0)
 
-    user_data[update.effective_chat.id] = {"image": path}
+    user_data[update.effective_chat.id] = {"image": bio}
 
     keyboard = [
-        [InlineKeyboardButton("📏 أفقي", callback_data="h")],
-        [InlineKeyboardButton("📐 عمودي", callback_data="v")]
+        [InlineKeyboardButton("📏 أفقي", callback_data="h"),
+         InlineKeyboardButton("📐 عمودي", callback_data="v")]
     ]
 
     await update.message.reply_text(
@@ -46,15 +63,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("ارسل صورة أولاً")
         return
 
-    # حفظ النوع
+    # اختيار الاتجاه
     if query.data in ["h", "v"]:
         user_data[chat_id]["mode"] = query.data
 
         keyboard = [
-            [InlineKeyboardButton("2 أجزاء", callback_data="2"),
-             InlineKeyboardButton("3 أجزاء", callback_data="3")],
-            [InlineKeyboardButton("4 أجزاء", callback_data="4"),
-             InlineKeyboardButton("6 أجزاء", callback_data="6")]
+            [InlineKeyboardButton("2", callback_data="2"),
+             InlineKeyboardButton("3", callback_data="3")],
+            [InlineKeyboardButton("4", callback_data="4"),
+             InlineKeyboardButton("6", callback_data="6")]
         ]
 
         await query.message.reply_text(
@@ -63,61 +80,76 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # =========================
-    # تنفيذ التقسيم
-    # =========================
-    parts_count = int(query.data)
-    img_path = user_data[chat_id]["image"]
-    mode = user_data[chat_id]["mode"]
+    # تشغيل المعالجة بسرعة
+    user_data[chat_id]["parts"] = int(query.data)
 
-    img = Image.open(img_path)
+    context.application.create_task(process_image(chat_id, context))
 
-    parts = []
 
-    # =========================
-    # أفقي
-    # =========================
+# =========================
+# المعالجة السريعة جداً
+# =========================
+async def process_image(chat_id, context):
+    data = user_data.get(chat_id)
+    if not data:
+        return
+
+    img = Image.open(data["image"]).convert("RGB")
+
+    mode = data["mode"]
+    parts = data["parts"]
+
+    w, h = img.size
+
+    results = []
+
     if mode == "h":
-        width, height = img.size
-        part_width = width // parts_count
+        step = w // parts
 
-        for i in range(parts_count):
-            left = i * part_width
-            right = (i + 1) * part_width if i < parts_count - 1 else width
+        for i in range(parts):
+            left = i * step
+            right = (i + 1) * step if i < parts - 1 else w
 
-            part = img.crop((left, 0, right, height))
-            part = part.resize((A4_WIDTH, A4_HEIGHT), Image.LANCZOS)
+            crop = img.crop((left, 0, right, h))
+            crop = crop.resize(A4_SIZE, Image.LANCZOS)
 
-            name = f"a4_h_{i+1}.png"
-            part.save(name, "PNG", quality=100)
-            parts.append(name)
+            bio = io.BytesIO()
+            crop.save(bio, format="JPEG", quality=90, optimize=True)
+            bio.seek(0)
 
-    # =========================
-    # عمودي
-    # =========================
+            results.append(bio)
+
     else:
-        width, height = img.size
-        part_height = height // parts_count
+        step = h // parts
 
-        for i in range(parts_count):
-            top = i * part_height
-            bottom = (i + 1) * part_height if i < parts_count - 1 else height
+        for i in range(parts):
+            top = i * step
+            bottom = (i + 1) * step if i < parts - 1 else h
 
-            part = img.crop((0, top, width, bottom))
-            part = part.resize((A4_WIDTH, A4_HEIGHT), Image.LANCZOS)
+            crop = img.crop((0, top, w, bottom))
+            crop = crop.resize(A4_SIZE, Image.LANCZOS)
 
-            name = f"a4_v_{i+1}.png"
-            part.save(name, "PNG", quality=100)
-            parts.append(name)
+            bio = io.BytesIO()
+            crop.save(bio, format="JPEG", quality=90, optimize=True)
+            bio.seek(0)
 
-    # إرسال النتائج
-    for file in parts:
-        await query.message.reply_document(document=open(file, "rb"))
+            results.append(bio)
 
-    # تنظيف
-    os.remove(img_path)
-    for file in parts:
-        os.remove(file)
+    # إرسال سريع (batch send)
+    media_group = []
+
+    for i, b in enumerate(results):
+        media_group.append(
+            (b, f"part_{i+1}.jpg")
+        )
+
+    # إرسال واحد واحد لكن سريع جداً (بدون فتح/إغلاق ملفات)
+    for file, name in media_group:
+        await context.bot.send_document(
+            chat_id=chat_id,
+            document=file,
+            filename=name
+        )
 
     user_data.pop(chat_id, None)
 
@@ -126,8 +158,3 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # تشغيل البوت
 # =========================
 app = ApplicationBuilder().token(TOKEN).build()
-
-app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-app.add_handler(CallbackQueryHandler(button_handler))
-
-app.run_polling()
