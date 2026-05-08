@@ -10,7 +10,7 @@ from telegram.ext import (
     CommandHandler
 )
 
-TOKEN = "8329558378:AAHsO-VRONdeDY3937r2ZCmFJmvFpSQMntc"
+TOKEN = "8329558378:AAHYZHoXJHIWokyEYVfb-Xw6YxCz08P7bg0"
 
 user_data = {}
 
